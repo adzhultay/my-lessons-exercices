@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Merge Lens — structural diff &amp; 3-way merge for JSON/YAML</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+
+<style>
+/* layout: centered editorial column; hero states the thesis, then a live
+   three-pane (base/ours/theirs) playground runs the real merge algorithm */
+:root{
+  --bg: hsl(210 24% 97%);
+  --surface: hsl(0 0% 100%);
+  --surface-2: hsl(210 20% 93%);
+  --border: hsl(214 18% 84%);
+  --fg: hsl(222 32% 14%);
+  --fg-dim: hsl(222 14% 42%);
+  --accent: hsl(252 62% 50%);
+  --accent-fg: hsl(0 0% 100%);
+  --ok: hsl(152 52% 30%);
+  --ok-bg: hsl(152 45% 93%);
+  --warn: hsl(28 80% 38%);
+  --warn-bg: hsl(32 85% 93%);
+  --code-bg: hsl(222 30% 12%);
+  --code-fg: hsl(210 28% 92%);
+  --code-border: hsl(222 20% 24%);
+  --code-dim: hsl(210 12% 60%);
+  --radius: 10px;
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-body: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg: hsl(224 28% 9%);
+    --surface: hsl(224 24% 13%);
+    --surface-2: hsl(224 20% 17%);
+    --border: hsl(224 16% 25%);
+    --fg: hsl(210 20% 92%);
+    --fg-dim: hsl(210 10% 66%);
+    --accent: hsl(252 80% 76%);
+    --accent-fg: hsl(224 30% 10%);
+    --ok: hsl(152 55% 60%);
+    --ok-bg: hsl(152 35% 15%);
+    --warn: hsl(30 90% 68%);
+    --warn-bg: hsl(30 50% 16%);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg: hsl(224 28% 9%);
+  --surface: hsl(224 24% 13%);
+  --surface-2: hsl(224 20% 17%);
+  --border: hsl(224 16% 25%);
+  --fg: hsl(210 20% 92%);
+  --fg-dim: hsl(210 10% 66%);
+  --accent: hsl(252 80% 76%);
+  --accent-fg: hsl(224 30% 10%);
+  --ok: hsl(152 55% 60%);
+  --ok-bg: hsl(152 35% 15%);
+  --warn: hsl(30 90% 68%);
+  --warn-bg: hsl(30 50% 16%);
+  color-scheme: dark;
+}
+
+*{ box-sizing: border-box; }
+body{
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.wrap{ max-width: 980px; margin-inline: auto; padding-block: 28px 64px; }
+h1,h2,h3{ font-family: var(--font-display); font-weight: 600; text-wrap: balance; margin: 0; }
+code, pre, textarea, .mono{ font-family: var(--font-mono); }
+a{ color: var(--accent); }
+a:focus-visible, button:focus-visible, textarea:focus-visible{ outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* header */
+.topbar{ display:flex; align-items:center; justify-content:space-between; gap: 12px; margin-bottom: 44px; flex-wrap: wrap; }
+.brand{ display:flex; align-items:center; gap:10px; font-family: var(--font-display); font-weight: 600; font-size: 1.15rem; }
+.brand .mark{ width: 30px; height: 30px; border-radius: 8px; background: var(--accent); color: var(--accent-fg);
+  display:flex; align-items:center; justify-content:center; font-family: var(--font-mono); font-size: 0.95rem; font-weight: 500; }
+.source-link{ font-size: 0.85rem; color: var(--fg-dim); text-decoration: none; border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px; }
+.source-link:hover{ color: var(--accent); border-color: var(--accent); }
+
+/* hero */
+.hero h1{ font-size: clamp(1.9rem, 4.2vw, 2.7rem); letter-spacing: -0.01em; }
+.hero h1 em{ color: var(--accent); font-style: italic; }
+.hero p.lede{ max-width: 62ch; color: var(--fg-dim); font-size: 1.05rem; margin: 16px 0 0; }
+.badges{ display:flex; gap: 8px; flex-wrap: wrap; margin-top: 22px; }
+.badge{ font-size: 0.78rem; font-family: var(--font-mono); color: var(--fg-dim); background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; }
+
+/* sections */
+section{ margin-top: 56px; }
+.section-head{ display:flex; align-items:baseline; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.section-head h2{ font-size: 1.3rem; }
+.section-head .step{ font-family: var(--font-mono); font-size: 0.78rem; color: var(--fg-dim); }
+.section-sub{ color: var(--fg-dim); margin: -6px 0 18px; max-width: 68ch; }
+
+/* presets */
+.presets{ display:flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.preset{ font-family: var(--font-body); font-size: 0.85rem; font-weight: 500; color: var(--fg);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+.preset[aria-pressed="true"]{ background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.preset:hover:not([aria-pressed="true"]){ border-color: var(--accent); }
+
+/* editor grid */
+.editors{ display:grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+@media (max-width: 760px){ .editors{ grid-template-columns: 1fr; } }
+.editor{ display:flex; flex-direction:column; gap: 6px; min-width: 0; }
+.editor label{ font-size: 0.78rem; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; color: var(--fg-dim); }
+.editor label .sub{ text-transform: none; letter-spacing: 0; font-weight: 400; display:block; font-size: 0.78rem; color: var(--fg-dim); margin-top: 1px; }
+.editor textarea{
+  width: 100%; min-height: 168px; resize: vertical; background: var(--code-bg); color: var(--code-fg);
+  border: 1px solid var(--code-border); border-radius: var(--radius); padding: 12px 14px; font-size: 0.86rem; line-height: 1.5;
+  tab-size: 2;
+}
+
+.run-row{ display:flex; align-items:center; gap: 14px; margin-top: 16px; flex-wrap: wrap; }
+.run-btn{ font-family: var(--font-body); font-weight: 600; font-size: 0.92rem; color: var(--accent-fg); background: var(--accent);
+  border: none; border-radius: 8px; padding: 11px 22px; cursor: pointer; }
+.run-btn:hover{ filter: brightness(1.06); }
+.run-note{ font-size: 0.82rem; color: var(--fg-dim); }
+
+/* output */
+.output{ margin-top: 22px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.tabs{ display:flex; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.tab{ font-family: var(--font-body); font-size: 0.85rem; font-weight: 500; color: var(--fg-dim); background: none; border: none;
+  padding: 12px 18px; cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; }
+.tab[aria-selected="true"]{ color: var(--fg); border-bottom-color: var(--accent); }
+.tab .count{ font-family: var(--font-mono); font-size: 0.75rem; margin-left: 6px; opacity: 0.8; }
+.panel{ padding: 18px 20px; }
+.panel[hidden]{ display:none; }
+
+.statline{ display:flex; align-items:center; gap: 8px; font-size: 0.85rem; margin-bottom: 14px; }
+.pill{ font-family: var(--font-mono); font-size: 0.75rem; font-weight: 500; border-radius: 999px; padding: 3px 10px; }
+.pill.ok{ background: var(--ok-bg); color: var(--ok); }
+.pill.warn{ background: var(--warn-bg); color: var(--warn); }
+
+pre.code{ margin: 0; background: var(--code-bg); color: var(--code-fg); border: 1px solid var(--code-border);
+  border-radius: var(--radius); padding: 14px 16px; font-size: 0.84rem; line-height: 1.55; overflow-x: auto; }
+pre.code .dim{ color: var(--code-dim); }
+
+.conflict-card{ border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 10px; }
+.conflict-card:last-child{ margin-bottom: 0; }
+.conflict-card .path{ font-family: var(--font-mono); font-size: 0.85rem; color: var(--warn); margin-bottom: 8px; }
+.conflict-card .row{ display:grid; grid-template-columns: 60px 1fr; gap: 8px; font-size: 0.82rem; margin-top: 3px; }
+.conflict-card .row .k{ color: var(--fg-dim); }
+.conflict-card .row code{ font-size: 0.82rem; }
+.empty-state{ color: var(--fg-dim); font-size: 0.9rem; }
+
+.git-note{ font-size: 0.82rem; color: var(--fg-dim); margin-bottom: 12px; }
+.git-note strong{ color: var(--fg); }
+
+/* how it decides */
+.rules{ list-style: none; margin: 0; padding: 0; display:grid; gap: 10px; }
+.rules li{ display:grid; grid-template-columns: 20px 1fr; gap: 10px; font-size: 0.92rem; align-items: start; }
+.rules li::before{ content: "→"; color: var(--accent); font-family: var(--font-mono); }
+
+.limits{ margin-top: 18px; font-size: 0.86rem; color: var(--fg-dim); border-top: 1px solid var(--border); padding-top: 16px; }
+.limits strong{ color: var(--fg); }
+
+footer{ margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--border); display:flex; justify-content:space-between;
+  gap: 12px; flex-wrap: wrap; font-size: 0.82rem; color: var(--fg-dim); }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="brand"><span class="mark">⌗</span> Merge Lens</div>
+    <a class="source-link" href="https://github.com/adzhultay/my-lessons-exercices/tree/claude/magical-clarke-kwvj4u/merge-lens" target="_blank" rel="noopener">Source →</a>
+  </div>
+
+  <div class="hero">
+    <h1>Your merge conflict isn&rsquo;t <em>always</em> a conflict.</h1>
+    <p class="lede">Git merges JSON and YAML line by line. When a config file just gets its keys reordered &mdash; a regenerated lockfile, a reformatted manifest &mdash; and another branch made one real, unrelated change, Git still reports a conflict. Merge Lens compares by value instead of by line, so reordering produces no diff and no conflict. Genuine conflicts still show up, exactly as before.</p>
+    <div class="badges">
+      <span class="badge">JSON</span>
+      <span class="badge">YAML</span>
+      <span class="badge">git merge driver</span>
+      <span class="badge">zero backend</span>
+      <span class="badge">MIT</span>
+    </div>
+  </div>
+
+  <section id="demo">
+    <div class="section-head"><span class="step">01</span><h2>Try it</h2></div>
+    <p class="section-sub">This runs the actual merge algorithm from the npm package, ported into this page &mdash; not a mockup. Edit any of the three files and merge.</p>
+
+    <div class="presets">
+      <button class="preset" data-preset="reorder" aria-pressed="true">Reordered config &middot; false conflict</button>
+      <button class="preset" data-preset="conflict" aria-pressed="false">Same field edited twice &middot; genuine conflict</button>
+    </div>
+
+    <div class="editors">
+      <div class="editor">
+        <label>Base<span class="sub">common ancestor</span></label>
+        <textarea id="in-base" spellcheck="false"></textarea>
+      </div>
+      <div class="editor">
+        <label>Ours<span class="sub">current branch</span></label>
+        <textarea id="in-ours" spellcheck="false"></textarea>
+      </div>
+      <div class="editor">
+        <label>Theirs<span class="sub">branch being merged in</span></label>
+        <textarea id="in-theirs" spellcheck="false"></textarea>
+      </div>
+    </div>
+
+    <div class="run-row">
+      <button class="run-btn" id="run-merge">Merge</button>
+      <span class="run-note" id="run-note">Structural merge runs live, in your browser &mdash; nothing is sent anywhere.</span>
+    </div>
+
+    <div class="output">
+      <div class="tabs" role="tablist">
+        <button class="tab" id="tab-merged" role="tab" aria-selected="true">Merged result</button>
+        <button class="tab" id="tab-conflicts" role="tab" aria-selected="false">Conflicts<span class="count" id="conflict-count"></span></button>
+        <button class="tab" id="tab-git" role="tab" aria-selected="false">What plain git shows instead</button>
+      </div>
+
+      <div class="panel" id="panel-merged">
+        <div class="statline" id="merged-stat"></div>
+        <pre class="code" id="merged-output"></pre>
+      </div>
+
+      <div class="panel" id="panel-conflicts" hidden>
+        <div id="conflicts-list"></div>
+      </div>
+
+      <div class="panel" id="panel-git" hidden>
+        <div id="git-note"></div>
+        <pre class="code" id="git-output"></pre>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><span class="step">02</span><h2>How it decides</h2></div>
+    <ul class="rules">
+      <li>Unchanged on one side, changed on the other &rarr; the changed value wins.</li>
+      <li>Changed identically on both sides &rarr; no conflict.</li>
+      <li>Changed to different values on both sides &rarr; conflict, reported with the exact path and all three values.</li>
+      <li>Deleted on one side, unchanged on the other &rarr; the deletion wins.</li>
+      <li>Deleted on one side, modified on the other &rarr; conflict.</li>
+      <li>Lists of objects (e.g. Kubernetes containers, Compose services) are matched by <code>name</code>/<code>id</code>/<code>key</code> rather than position, so editing one entry never conflicts with an unrelated edit to another.</li>
+    </ul>
+    <div class="limits">
+      <strong>What this doesn&rsquo;t do:</strong> preserve YAML comments across a merge, guess array reordering without an identity field, or keep JSON&rsquo;s exact original formatting. When a real conflict can&rsquo;t be resolved structurally, it falls back to Git&rsquo;s own <code>merge-file</code> conflict markers &mdash; never silent data loss.
+    </div>
+  </section>
+
+  <footer>
+    <span>Install once per repo: <code class="mono">merge-lens install</code>. MIT licensed.</span>
+    <a class="source-link" href="https://github.com/adzhultay/my-lessons-exercices/tree/claude/magical-clarke-kwvj4u/merge-lens" target="_blank" rel="noopener">View source &amp; README</a>
+  </footer>
+
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ---- ported, unmodified in logic, from src/util.js / diff.js / merge3.js ---- */
+  const ID_KEY_CANDIDATES = ['id', 'name', 'key', 'uid', 'uuid'];
+
+  function isPlainObject(x){ return typeof x === 'object' && x !== null && !Array.isArray(x); }
+
+  function deepEqual(a, b){
+    if (a === b) return true;
+    if (typeof a !== typeof b) return false;
+    if (Array.isArray(a) || Array.isArray(b)){
+      if (!Array.isArray(a) || !Array.isArray(b)) return false;
+      if (a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) if (!deepEqual(a[i], b[i])) return false;
+      return true;
+    }
+    if (isPlainObject(a) || isPlainObject(b)){
+      if (!isPlainObject(a) || !isPlainObject(b)) return false;
+      const ak = Object.keys(a), bk = Object.keys(b);
+      if (ak.length !== bk.length) return false;
+      for (const k of ak){
+        if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
+        if (!deepEqual(a[k], b[k])) return false;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  function pathStr(path){
+    let s = '$';
+    for (const seg of path){
+      if (typeof seg === 'number') s += `[${seg}]`;
+      else if (typeof seg === 'string' && seg.includes('=')) s += `[${seg}]`;
+      else s += `.${seg}`;
+    }
+    return s;
+  }
+
+  function isValidIdKey(arr, candidate){
+    if (arr.length === 0) return true;
+    const values = [];
+    for (const e of arr){
+      const v = e[candidate];
+      if (typeof v !== 'string' && typeof v !== 'number') return false;
+      values.push(v);
+    }
+    return new Set(values).size === values.length;
+  }
+
+  function detectIdKey(...arrays){
+    if (!arrays.some(arr => arr.length > 0)) return null;
+    for (const candidate of ID_KEY_CANDIDATES){
+      if (arrays.every(arr => isValidIdKey(arr, candidate))) return candidate;
+    }
+    return null;
+  }
+
+  function merge3(base, ours, theirs, path = []){
+    if (deepEqual(ours, theirs)) return { value: ours, conflicts: [] };
+    if (deepEqual(base, ours)) return { value: theirs, conflicts: [] };
+    if (deepEqual(base, theirs)) return { value: ours, conflicts: [] };
+
+    if (isPlainObject(base) && isPlainObject(ours) && isPlainObject(theirs)) return mergeObjects(base, ours, theirs, path);
+    if (Array.isArray(base) && Array.isArray(ours) && Array.isArray(theirs)) return mergeArrays(base, ours, theirs, path);
+
+    return { value: ours, conflicts: [{ path: pathStr(path), base, ours, theirs, kind: 'both-modified' }] };
+  }
+
+  function mergeObjects(base, ours, theirs, path){
+    const orderedKeys = [...Object.keys(ours), ...Object.keys(theirs), ...Object.keys(base)]
+      .filter((k, i, arr) => arr.indexOf(k) === i);
+    const result = {};
+    const conflicts = [];
+
+    for (const k of orderedKeys){
+      const inBase = Object.prototype.hasOwnProperty.call(base, k);
+      const inOurs = Object.prototype.hasOwnProperty.call(ours, k);
+      const inTheirs = Object.prototype.hasOwnProperty.call(theirs, k);
+      const bv = base[k], ov = ours[k], tv = theirs[k];
+      const childPath = [...path, k];
+
+      if (!inBase && !inOurs && inTheirs){ result[k] = tv; continue; }
+      if (!inBase && inOurs && !inTheirs){ result[k] = ov; continue; }
+      if (!inBase && inOurs && inTheirs){
+        if (deepEqual(ov, tv)) result[k] = ov;
+        else { conflicts.push({ path: pathStr(childPath), base: undefined, ours: ov, theirs: tv, kind: 'both-added-different' }); result[k] = ov; }
+        continue;
+      }
+      if (inBase && !inOurs && !inTheirs) continue;
+      if (inBase && !inOurs && inTheirs){
+        if (deepEqual(bv, tv)) continue;
+        conflicts.push({ path: pathStr(childPath), base: bv, ours: undefined, theirs: tv, kind: 'deleted-vs-modified' });
+        result[k] = tv; continue;
+      }
+      if (inBase && inOurs && !inTheirs){
+        if (deepEqual(bv, ov)) continue;
+        conflicts.push({ path: pathStr(childPath), base: bv, ours: ov, theirs: undefined, kind: 'modified-vs-deleted' });
+        result[k] = ov; continue;
+      }
+      const sub = merge3(bv, ov, tv, childPath);
+      result[k] = sub.value;
+      conflicts.push(...sub.conflicts);
+    }
+    return { value: result, conflicts };
+  }
+
+  function mergeArrays(base, ours, theirs, path){
+    const allObjects = [base, ours, theirs].every(arr => arr.every(isPlainObject));
+    const idKey = allObjects ? detectIdKey(base, ours, theirs) : null;
+
+    if (!idKey) return { value: ours, conflicts: [{ path: pathStr(path), base, ours, theirs, kind: 'array-atomic-conflict' }] };
+
+    const toMap = arr => new Map(arr.map(e => [e[idKey], e]));
+    const baseMap = toMap(base), oursMap = toMap(ours), theirsMap = toMap(theirs);
+    const order = [];
+    for (const e of ours) if (!order.includes(e[idKey])) order.push(e[idKey]);
+    for (const e of theirs) if (!order.includes(e[idKey])) order.push(e[idKey]);
+
+    const result = [];
+    const conflicts = [];
+    for (const id of order){
+      const inBase = baseMap.has(id), inOurs = oursMap.has(id), inTheirs = theirsMap.has(id);
+      const bv = baseMap.get(id), ov = oursMap.get(id), tv = theirsMap.get(id);
+      const childPath = [...path, `${idKey}=${id}`];
+
+      if (!inBase && inOurs && !inTheirs){ result.push(ov); continue; }
+      if (!inBase && !inOurs && inTheirs){ result.push(tv); continue; }
+      if (!inBase && inOurs && inTheirs){
+        if (deepEqual(ov, tv)) result.push(ov);
+        else { conflicts.push({ path: pathStr(childPath), base: undefined, ours: ov, theirs: tv, kind: 'both-added-different' }); result.push(ov); }
+        continue;
+      }
+      if (inBase && !inOurs && !inTheirs) continue;
+      if (inBase && !inOurs && inTheirs){
+        if (deepEqual(bv, tv)) continue;
+        conflicts.push({ path: pathStr(childPath), base: bv, ours: undefined, theirs: tv, kind: 'deleted-vs-modified' });
+        result.push(tv); continue;
+      }
+      if (inBase && inOurs && !inTheirs){
+        if (deepEqual(bv, ov)) continue;
+        conflicts.push({ path: pathStr(childPath), base: bv, ours: ov, theirs: undefined, kind: 'modified-vs-deleted' });
+        result.push(ov); continue;
+      }
+      const sub = merge3(bv, ov, tv, childPath);
+      result.push(sub.value);
+      conflicts.push(...sub.conflicts);
+    }
+    return { value: result, conflicts };
+  }
+
+  /* ---- presets (the reorder example and its real captured `git merge` output
+         were run for real in a sandboxed git repo while building this tool) ---- */
+  const PRESETS = {
+    reorder: {
+      base: `service:\n  name: web\n  image: myapp:v1\n  replicas: 1\nlogging:\n  level: info\n`,
+      ours: `logging:\n  level: debug\nservice:\n  image: myapp:v1\n  name: web\n  replicas: 1\n`,
+      theirs: `service:\n  name: web\n  image: myapp:v1\n  replicas: 3\nlogging:\n  level: info\n`,
+      gitNote: `Captured from a real <strong>git merge</strong> run: &ldquo;ours&rdquo; only reordered keys and changed logging, &ldquo;theirs&rdquo; only bumped replicas &mdash; nothing overlaps, yet Git still conflicts because the reordered lines touch the same region of the file.`,
+      git: `<<<<<<< HEAD\n=======\nservice:\n  name: web\n  image: myapp:v1\n  replicas: 3\n>>>>>>> feature\nlogging:\n  level: debug\nservice:\n  image: myapp:v1\n  name: web\n  replicas: 1\n`,
+    },
+    conflict: {
+      base: `replicas: 1\n`,
+      ours: `replicas: 9\n`,
+      theirs: `replicas: 5\n`,
+      gitNote: `Both branches changed the same field to different values. This is a real conflict &mdash; Merge Lens reports it the same way Git does, with the exact path and all three values.`,
+      git: `<<<<<<< HEAD\nreplicas: 9\n=======\nreplicas: 5\n>>>>>>> feature\n`,
+    },
+  };
+
+  const $ = id => document.getElementById(id);
+  const elBase = $('in-base'), elOurs = $('in-ours'), elTheirs = $('in-theirs');
+  let activePreset = 'reorder';
+
+  function loadPreset(name){
+    activePreset = name;
+    const p = PRESETS[name];
+    elBase.value = p.base;
+    elOurs.value = p.ours;
+    elTheirs.value = p.theirs;
+    document.querySelectorAll('.preset').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.preset === name)));
+    runMerge();
+  }
+
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function fmtVal(v){
+    if (v === undefined) return '<span class="dim">&lt;absent&gt;</span>';
+    return escapeHtml(JSON.stringify(v));
+  }
+
+  function runMerge(){
+    let base, ours, theirs;
+    try {
+      base = window.jsyaml.load(elBase.value) ?? {};
+      ours = window.jsyaml.load(elOurs.value) ?? {};
+      theirs = window.jsyaml.load(elTheirs.value) ?? {};
+    } catch (err){
+      $('merged-output').textContent = 'YAML parse error: ' + err.message;
+      $('merged-stat').innerHTML = '<span class="pill warn">parse error</span>';
+      $('conflicts-list').innerHTML = '<p class="empty-state">Fix the YAML above, then merge again.</p>';
+      return;
+    }
+
+    const { value, conflicts } = merge3(base, ours, theirs);
+    const mergedYaml = window.jsyaml.dump(value, { noRefs: true, sortKeys: false });
+
+    $('merged-output').textContent = mergedYaml;
+    $('conflict-count').textContent = conflicts.length ? `(${conflicts.length})` : '';
+
+    if (conflicts.length === 0){
+      $('merged-stat').innerHTML = '<span class="pill ok">clean merge &middot; 0 conflicts</span>';
+      $('conflicts-list').innerHTML = '<p class="empty-state">No conflicts. Every differing key was either changed on only one side, or changed identically on both.</p>';
+    } else {
+      $('merged-stat').innerHTML = `<span class="pill warn">${conflicts.length} conflict${conflicts.length>1?'s':''}</span>`;
+      $('conflicts-list').innerHTML = conflicts.map(c => `
+        <div class="conflict-card">
+          <div class="path">${escapeHtml(c.path)} <span class="dim">&middot; ${escapeHtml(c.kind)}</span></div>
+          <div class="row"><span class="k">base</span><code>${fmtVal(c.base)}</code></div>
+          <div class="row"><span class="k">ours</span><code>${fmtVal(c.ours)}</code></div>
+          <div class="row"><span class="k">theirs</span><code>${fmtVal(c.theirs)}</code></div>
+        </div>
+      `).join('');
+    }
+
+    // The "what plain git shows" panel only has real captured output for the
+    // two built-in presets. Custom edits are live for the merge itself, but
+    // this panel says so plainly instead of fabricating a diff3 simulation.
+    const matchesPreset = PRESETS[activePreset] &&
+      elBase.value === PRESETS[activePreset].base &&
+      elOurs.value === PRESETS[activePreset].ours &&
+      elTheirs.value === PRESETS[activePreset].theirs;
+
+    if (matchesPreset){
+      $('git-note').innerHTML = `<p class="git-note">${PRESETS[activePreset].gitNote}</p>`;
+      $('git-output').textContent = PRESETS[activePreset].git;
+    } else {
+      $('git-note').innerHTML = `<p class="git-note">This panel shows real, captured <strong>git merge</strong> output for the two built-in presets above &mdash; it is not reconstructed for custom edits, so it isn&rsquo;t shown here. Pick a preset to see it.</p>`;
+      $('git-output').textContent = '';
+    }
+  }
+
+  document.querySelectorAll('.preset').forEach(btn => {
+    btn.addEventListener('click', () => loadPreset(btn.dataset.preset));
+  });
+  $('run-merge').addEventListener('click', runMerge);
+
+  const tabs = [
+    ['tab-merged', 'panel-merged'],
+    ['tab-conflicts', 'panel-conflicts'],
+    ['tab-git', 'panel-git'],
+  ];
+  tabs.forEach(([tabId, panelId]) => {
+    $(tabId).addEventListener('click', () => {
+      tabs.forEach(([t, p]) => { $(t).setAttribute('aria-selected', String(t === tabId)); $(p).hidden = t !== tabId; });
+    });
+  });
+
+  loadPreset('reorder');
+})();
+</script>
+</body>
+</html>

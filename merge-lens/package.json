@@ -1,0 +1,19 @@
+{
+  "name": "merge-lens",
+  "version": "0.1.0",
+  "description": "Structural diff and 3-way merge for JSON/YAML, usable as a Git merge driver that auto-resolves false conflicts from key reordering.",
+  "type": "module",
+  "bin": {
+    "merge-lens": "bin/cli.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "yaml": "^2.9.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
